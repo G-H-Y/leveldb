@@ -152,9 +152,10 @@ DBImpl::DBImpl(const Options& raw_options, const std::string& dbname)
 DBImpl::~DBImpl() {
   // Wait for background work to finish.
   mutex_.Lock();
-
+  printf("before logging!\n");
   versions_->LogAllFilesStat(stat_log_.get());
   versions_->LogCurrentFilesStat(stat_log_.get());
+  printf("after logging!\n");
 
   shutting_down_.store(true, std::memory_order_release);
   while (background_compaction_scheduled_) {
@@ -884,14 +885,54 @@ Status DBImpl::InstallCompactionResults(CompactionState* compact) {
       compact->compaction->num_input_files(1), compact->compaction->level() + 1,
       static_cast<long long>(compact->total_bytes));
 
+  std::string info = "--------------------Estimated Lifetime of Files at Level: " + NumberToString(compact->compaction->level()+1)+
+                    " --------------------\n" + "+++++Real LifeTime of Predecessor SSTfiles++++++\n";
+  stat_log_->AppendLog(info);
+
+  //calculate delete_time/real_lifetime
+  for (int i = 0; i < compact->compaction->num_input_files(1); i++){
+      FileMetaData& f = *compact->compaction->input(1, i);
+      f.delete_time = env_->NowMicros();
+      f.real_lifetime = f.delete_time - f.create_time;
+      std::string psst = NumberToString(f.number) + " " + NumberToString(f.real_lifetime) + "\n";
+      stat_log_->AppendLog(psst);
+  }
+
   // Add compaction outputs
+  std::string info2 = "+++++Estimated LifeTime of New Created SSTfiles++++++\n";
+  stat_log_->AppendLog(info2);
+  std::vector<uint64_t> estimation;
   compact->compaction->AddInputDeletions(compact->compaction->edit());
   const int level = compact->compaction->level();
   for (size_t i = 0; i < compact->outputs.size(); i++) {
     const CompactionState::Output& out = compact->outputs[i];
-    compact->compaction->edit()->AddFile(level + 1, out.number, out.file_size,
+    uint64_t estimate_lifetime = 0;
+    //estimate lifetime
+      for (int j = 0; j < compact->compaction->num_input_files(1); j++){
+          const FileMetaData& input_file = *compact->compaction->input(1, j);
+          Slice input_largest = input_file.largest.user_key();
+          Slice input_smallest = input_file.smallest.user_key();
+          Slice output_largest = out.largest.user_key();
+          Slice output_smallest = out.smallest.user_key();
+          Slice overlap_end = input_largest.compare(output_largest) < 0 ? input_largest : output_largest;
+          Slice overlap_begin = input_smallest.compare(output_smallest) < 0 ? output_smallest : input_smallest;
+          double ol = std::atof(output_largest.data());
+          double os = std::atof(output_smallest.data());
+          double ob = std::atof(overlap_begin.data());
+          double oe = std::atof(overlap_end.data());
+          double overlap_ratio = (double)(oe-ob)/(ol-os);
+          estimate_lifetime += overlap_ratio * input_file.real_lifetime;
+      }
+      estimation.push_back(estimate_lifetime);
+   /* compact->compaction->edit()->AddFile(level + 1, out.number, out.file_size,
                                          out.smallest, out.largest);
+                                         */
+      compact->compaction->edit()->AddFile2(level + 1, out.number, out.file_size,
+                                           out.smallest, out.largest,estimate_lifetime);
+      std::string csst = NumberToString(out.number) + " " + NumberToString(estimate_lifetime) + "\n";
+      stat_log_->AppendLog(csst);
   }
+
   return versions_->LogAndApply(compact->compaction->edit(), &mutex_);
 }
 

@@ -19,6 +19,8 @@
 #include <set>
 #include <vector>
 #include <unordered_map>
+#include <time.h>
+#include <chrono>
 
 #include "db/dbformat.h"
 #include "db/version_edit.h"
@@ -61,8 +63,11 @@ bool SomeFileOverlapsRange(const InternalKeyComparator& icmp,
 struct FileStat {
   uint64_t number;
   uint64_t file_size;    // File size in bytes
+  //uint64_t create_time;
+  //uint64_t delete_time;
   uint64_t create_time;
   uint64_t delete_time;
+  uint64_t estimate_lifetime;
   int created_level;
 };
 

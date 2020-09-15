@@ -682,6 +682,7 @@ class VersionSet::Builder {
       tmp_f.file_size = f->file_size;
       tmp_f.create_time = f->create_time;
       tmp_f.delete_time = f->create_time;
+      tmp_f.estimate_lifetime = f->estimate_lifetime;
       tmp_f.created_level = level;
       auto found = vset_->all_file_stats_.find(level);
       if (found == vset_->all_file_stats_.end()) {

@@ -8,6 +8,8 @@
 #include <set>
 #include <utility>
 #include <vector>
+#include <time.h>
+#include <chrono>
 
 #include "db/dbformat.h"
 
@@ -24,7 +26,10 @@ struct FileMetaData {
   uint64_t file_size;    // File size in bytes
   InternalKey smallest;  // Smallest internal key served by table
   InternalKey largest;   // Largest internal key served by table
-  uint64_t create_time;
+  uint64_t create_time; //timestamp from 01-01-1970 (seconds)
+  uint64_t delete_time;
+  uint64_t real_lifetime;
+  uint64_t estimate_lifetime; //
 };
 
 class VersionEdit {
@@ -70,6 +75,17 @@ class VersionEdit {
     f.largest = largest;
     new_files_.push_back(std::make_pair(level, f));
   }
+
+    void AddFile2(int level, uint64_t file, uint64_t file_size,
+                 const InternalKey& smallest, const InternalKey& largest, uint64_t estimate_lifetime) {
+        FileMetaData f;
+        f.number = file;
+        f.file_size = file_size;
+        f.smallest = smallest;
+        f.largest = largest;
+        f.estimate_lifetime = estimate_lifetime;
+        new_files_.push_back(std::make_pair(level, f));
+    }
 
   // Delete the specified "file" from the specified "level".
   void RemoveFile(int level, uint64_t file) {
