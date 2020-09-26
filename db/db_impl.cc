@@ -152,10 +152,8 @@ DBImpl::DBImpl(const Options& raw_options, const std::string& dbname)
 DBImpl::~DBImpl() {
   // Wait for background work to finish.
   mutex_.Lock();
-  printf("before logging!\n");
   versions_->LogAllFilesStat(stat_log_.get());
   versions_->LogCurrentFilesStat(stat_log_.get());
-  printf("after logging!\n");
 
   shutting_down_.store(true, std::memory_order_release);
   while (background_compaction_scheduled_) {
@@ -921,7 +919,9 @@ Status DBImpl::InstallCompactionResults(CompactionState* compact) {
           double ob = std::atof(overlap_begin.data());
           double oe = std::atof(overlap_end.data());
           double overlap_ratio = (double)(oe-ob)/(ol-os);
-          estimate_lifetime += overlap_ratio * input_file.real_lifetime;
+          if(overlap_ratio > 0 && overlap_ratio <= 1){
+              estimate_lifetime += overlap_ratio * input_file.real_lifetime;
+          }
       }
       estimation.push_back(estimate_lifetime);
    /* compact->compaction->edit()->AddFile(level + 1, out.number, out.file_size,
