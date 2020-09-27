@@ -144,6 +144,8 @@ struct LEVELDB_EXPORT Options {
   // If enabled, write the internal statistics to the StatLog. It is
   // Stored in the DB directory and named as StatLog_(time in micro)
   bool stat_log = true;
+
+  bool est_log = true;
 };
 
 // Options that control read operations

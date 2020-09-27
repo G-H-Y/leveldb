@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cmath>
 
 #include "db/filename.h"
 #include "db/log_reader.h"
@@ -667,6 +668,17 @@ class VersionSet::Builder {
           && vset_->all_file_stats_[level].find(number) != vset_->all_file_stats_[level].end()) {
             uint64_t delete_time = vset_->env_->NowMicros();
             vset_->all_file_stats_[level][number].delete_time = delete_time;
+            uint64_t real_lifetime = vset_->all_file_stats_[level][number].delete_time - vset_->all_file_stats_[level][number].create_time;
+            uint64_t estimate_lifetime = vset_->all_file_stats_[level][number].estimate_lifetime;
+            uint64_t err_rate;
+            if(real_lifetime > estimate_lifetime){
+                err_rate = real_lifetime - estimate_lifetime;
+            }else{
+                err_rate = estimate_lifetime - real_lifetime;
+            }
+            std::string info = "level : " + NumberToString(level) + " number : " + NumberToString(number)
+                                + " est : " + NumberToString(estimate_lifetime) + " real : " + NumberToString(real_lifetime) + " err : " + NumberToString(err_rate) + "\n";
+            vset_->est_log_->AppendLog(info);
         }
       }
     }

@@ -26,6 +26,7 @@
 #include "db/version_edit.h"
 #include "port/port.h"
 #include "port/thread_annotations.h"
+#include "util/logging.h"
 
 namespace leveldb {
 
@@ -187,6 +188,11 @@ class VersionSet {
 
   ~VersionSet();
 
+  //return est_log
+  void setEstLog(StatLog* log_){
+      est_log_ = log_;
+  }
+
   // Apply *edit to the current version to form a new descriptor that
   // is both saved to persistent state and installed as the new
   // current version.  Will release *mu while actually writing to the file.
@@ -325,6 +331,7 @@ class VersionSet {
   uint64_t log_number_;
   uint64_t prev_log_number_;  // 0 or backing store for memtable being compacted
   std::map<int, std::map<uint64_t, FileStat>> all_file_stats_;
+  StatLog* est_log_;
 
   // Opened lazily
   WritableFile* descriptor_file_;
