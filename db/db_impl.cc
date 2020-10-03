@@ -536,8 +536,9 @@ Status DBImpl::WriteLevel0Table(MemTable* mem, VersionEdit* edit,
     if (base != nullptr) {
       level = base->PickLevelForMemTableOutput(min_user_key, max_user_key);
     }
-    edit->AddFile(level, meta.number, meta.file_size, meta.smallest,
-                  meta.largest);
+    uint64_t estimate_liftime = versions_->getAvgTime(level);
+    edit->AddFile2(level, meta.number, meta.file_size, meta.smallest,
+                  meta.largest, estimate_liftime);
   }
 
   CompactionStats stats;
@@ -905,32 +906,39 @@ Status DBImpl::InstallCompactionResults(CompactionState* compact) {
   for (size_t i = 0; i < compact->outputs.size(); i++) {
     const CompactionState::Output& out = compact->outputs[i];
     uint64_t estimate_lifetime = 0;
-    //estimate lifetime
-      for (int j = 0; j < compact->compaction->num_input_files(1); j++){
-          const FileMetaData& input_file = *compact->compaction->input(1, j);
-          Slice input_largest = input_file.largest.user_key();
-          Slice input_smallest = input_file.smallest.user_key();
-          Slice output_largest = out.largest.user_key();
-          Slice output_smallest = out.smallest.user_key();
-          Slice overlap_end = input_largest.compare(output_largest) < 0 ? input_largest : output_largest;
-          Slice overlap_begin = input_smallest.compare(output_smallest) < 0 ? output_smallest : input_smallest;
-          double ol = std::atof(output_largest.data());
-          double os = std::atof(output_smallest.data());
-          double ob = std::atof(overlap_begin.data());
-          double oe = std::atof(overlap_end.data());
-          double overlap_ratio = (double)(oe-ob)/(ol-os);
-          if(overlap_ratio > 0 && overlap_ratio <= 1){
-              estimate_lifetime += overlap_ratio * input_file.real_lifetime;
-          }
-      }
-      estimation.push_back(estimate_lifetime);
-   /* compact->compaction->edit()->AddFile(level + 1, out.number, out.file_size,
-                                         out.smallest, out.largest);
-                                         */
-      compact->compaction->edit()->AddFile2(level + 1, out.number, out.file_size,
-                                           out.smallest, out.largest,estimate_lifetime);
-      std::string csst = NumberToString(out.number) + " " + NumberToString(estimate_lifetime) + "\n";
-      stat_log_->AppendLog(csst);
+    if(level >= 2){
+        for (int j = 0; j < compact->compaction->num_input_files(1); j++){
+            const FileMetaData& input_file = *compact->compaction->input(1, j);
+            Slice input_largest = input_file.largest.user_key();
+            Slice input_smallest = input_file.smallest.user_key();
+            Slice output_largest = out.largest.user_key();
+            Slice output_smallest = out.smallest.user_key();
+            Slice overlap_end = input_largest.compare(output_largest) < 0 ? input_largest : output_largest;
+            Slice overlap_begin = input_smallest.compare(output_smallest) < 0 ? output_smallest : input_smallest;
+            double ol = std::atof(output_largest.data());
+            double os = std::atof(output_smallest.data());
+            double ob = std::atof(overlap_begin.data());
+            double oe = std::atof(overlap_end.data());
+            double overlap_ratio = (double)(oe-ob)/(ol-os);
+            if(overlap_ratio > 0 && overlap_ratio <= 1){
+                estimate_lifetime += overlap_ratio * input_file.real_lifetime;
+            }
+        }
+        estimation.push_back(estimate_lifetime);
+        /* compact->compaction->edit()->AddFile(level + 1, out.number, out.file_size,
+                                              out.smallest, out.largest);
+                                              */
+        compact->compaction->edit()->AddFile2(level + 1, out.number, out.file_size,
+                                              out.smallest, out.largest,estimate_lifetime);
+        std::string csst = NumberToString(out.number) + " " + NumberToString(estimate_lifetime) + "\n";
+        stat_log_->AppendLog(csst);
+    }else{
+        estimate_lifetime = versions_->getAvgTime(level+1);
+        compact->compaction->edit()->AddFile2(level + 1, out.number, out.file_size,
+                                              out.smallest, out.largest,estimate_lifetime);
+        std::string csst = NumberToString(out.number) + " " + NumberToString(estimate_lifetime) + "\n";
+        stat_log_->AppendLog(csst);
+    }
   }
 
   return versions_->LogAndApply(compact->compaction->edit(), &mutex_);

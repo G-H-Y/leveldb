@@ -679,6 +679,14 @@ class VersionSet::Builder {
             std::string info = "level : " + NumberToString(level) + " number : " + NumberToString(number)
                                 + " est : " + NumberToString(estimate_lifetime) + " real : " + NumberToString(real_lifetime) + " err : " + NumberToString(err_rate) + "\n";
             vset_->est_log_->AppendLog(info);
+            if(level < 3){
+                uint64_t avg = vset_->avetime_three_levels[level].first;
+                uint64_t sumsst = vset_->avetime_three_levels[level].second;
+                uint64_t sumtime = (avg * sumsst) + real_lifetime;
+                avg = sumtime / (sumsst+1);
+                vset_->avetime_three_levels[level].first = avg;
+                vset_->avetime_three_levels[level].second++;
+            }
         }
       }
     }

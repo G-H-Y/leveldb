@@ -193,6 +193,14 @@ class VersionSet {
       est_log_ = log_;
   }
 
+  uint64_t getAvgTime(int level){
+      uint64_t t = 0;
+      if(level < 3){
+          t = this->avetime_three_levels[level].first;
+      }
+      return t;
+  }
+
   // Apply *edit to the current version to form a new descriptor that
   // is both saved to persistent state and installed as the new
   // current version.  Will release *mu while actually writing to the file.
@@ -331,6 +339,7 @@ class VersionSet {
   uint64_t log_number_;
   uint64_t prev_log_number_;  // 0 or backing store for memtable being compacted
   std::map<int, std::map<uint64_t, FileStat>> all_file_stats_;
+  std::map<uint64_t,std::pair<uint64_t ,uint64_t>> avetime_three_levels;
   StatLog* est_log_;
 
   // Opened lazily
