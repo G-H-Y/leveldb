@@ -726,6 +726,7 @@ void DBImpl::BackgroundCompaction() {
         (m->done ? "(end)" : manual_end.DebugString().c_str()));
   } else {
     c = versions_->PickCompaction();
+   // printf("done pickcompaction!!\n");
   }
 
   Status status;
@@ -736,10 +737,13 @@ void DBImpl::BackgroundCompaction() {
     assert(c->num_input_files(0) == 1);
     FileMetaData* f = c->input(0, 0);
     c->edit()->RemoveFile(c->level(), f->number);
-    c->edit()->AddFile(c->level() + 1, f->number, f->file_size, f->smallest,
-                       f->largest);
+    uint64_t est_lifetime = env_->NowMicros() - f->real_lifetime;
+    c->edit()->RemoveFile2(c->level(),f->number,f->is_sizecompaction,f->is_passive);
+    //c->edit()->AddFile(c->level() + 1, f->number, f->file_size, f->smallest, f->largest);
+    c->edit()->AddFile2(c->level() + 1, f->number, f->file_size, f->smallest, f->largest, est_lifetime);
     c->edit()->SetTrivalMove();
     status = versions_->LogAndApply(c->edit(), &mutex_);
+    //printf("done logandapply in trivialmove!!\n");
     if (!status.ok()) {
       RecordBackgroundError(status);
     }
@@ -751,6 +755,7 @@ void DBImpl::BackgroundCompaction() {
   } else {
     CompactionState* compact = new CompactionState(c);
     status = DoCompactionWork(compact);
+   // printf("done docompaction work!!\n");
     if (!status.ok()) {
       RecordBackgroundError(status);
     }
@@ -925,9 +930,9 @@ Status DBImpl::InstallCompactionResults(CompactionState* compact) {
             }
         }
         estimation.push_back(estimate_lifetime);
-        /* compact->compaction->edit()->AddFile(level + 1, out.number, out.file_size,
+        /*compact->compaction->edit()->AddFile(level + 1, out.number, out.file_size,
                                               out.smallest, out.largest);
-                                              */
+              */
         compact->compaction->edit()->AddFile2(level + 1, out.number, out.file_size,
                                               out.smallest, out.largest,estimate_lifetime);
         std::string csst = NumberToString(out.number) + " " + NumberToString(estimate_lifetime) + "\n";

@@ -36,6 +36,7 @@ void VersionEdit::Clear() {
   has_last_sequence_ = false;
   deleted_files_.clear();
   new_files_.clear();
+  deleted_files_2.clear();
 }
 
 void VersionEdit::EncodeTo(std::string* dst) const {
@@ -70,6 +71,12 @@ void VersionEdit::EncodeTo(std::string* dst) const {
     PutVarint32(dst, kDeletedFile);
     PutVarint32(dst, deleted_file_kvp.first);   // level
     PutVarint64(dst, deleted_file_kvp.second);  // file number
+  }
+
+  for (size_t i = 0; i < deleted_files_2.size(); i++){
+      PutVarint32(dst, kDeletedFile);
+      PutVarint32(dst, deleted_files_2[i].first);   // level
+      PutVarint64(dst, deleted_files_2[i].second.number);  // file number
   }
 
   for (size_t i = 0; i < new_files_.size(); i++) {
@@ -172,6 +179,14 @@ Status VersionEdit::DecodeFrom(const Slice& src) {
         } else {
           msg = "deleted file";
         }
+        if (GetLevel(&input, &level) && GetVarint64(&input, &number)) {
+            FileMetaData df;
+            df.number = number;
+            df.is_deletedtag = true;
+            deleted_files_2.push_back(std::make_pair(level,df));
+        } else {
+            msg = "deleted file";
+        }
         break;
 
       case kNewFile:
@@ -236,6 +251,12 @@ std::string VersionEdit::DebugString() const {
     AppendNumberTo(&r, deleted_files_kvp.first);
     r.append(" ");
     AppendNumberTo(&r, deleted_files_kvp.second);
+  }
+  for (size_t i = 0; i <deleted_files_2.size();i++){
+    r.append("\n  RemoveFile: ");
+    AppendNumberTo(&r, deleted_files_2[i].first);
+    r.append(" ");
+    AppendNumberTo(&r, deleted_files_2[i].second.number);
   }
   for (size_t i = 0; i < new_files_.size(); i++) {
     const FileMetaData& f = new_files_[i].second;

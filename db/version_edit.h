@@ -22,6 +22,7 @@ struct FileMetaData {
 
   int refs;
   int allowed_seeks;  // Seeks allowed until compaction
+  //uint64_t level;
   uint64_t number;
   uint64_t file_size;    // File size in bytes
   InternalKey smallest;  // Smallest internal key served by table
@@ -29,7 +30,12 @@ struct FileMetaData {
   uint64_t create_time; //timestamp from 01-01-1970 (seconds)
   uint64_t delete_time;
   uint64_t real_lifetime;
-  uint64_t estimate_lifetime; //
+  uint64_t est_lifetime;
+  bool is_sizecompaction;
+  bool is_passive;
+  bool is_deletedtag;
+  //uint64_t active_est_lifetime; //
+  //uint64_t passive_est_lifetime;
 };
 
 class VersionEdit {
@@ -76,20 +82,45 @@ class VersionEdit {
     new_files_.push_back(std::make_pair(level, f));
   }
 
-    void AddFile2(int level, uint64_t file, uint64_t file_size,
-                 const InternalKey& smallest, const InternalKey& largest, uint64_t estimate_lifetime) {
-        FileMetaData f;
-        f.number = file;
-        f.file_size = file_size;
-        f.smallest = smallest;
-        f.largest = largest;
-        f.estimate_lifetime = estimate_lifetime;
-        new_files_.push_back(std::make_pair(level, f));
-    }
+  void AddFile2(int level, uint64_t file, uint64_t file_size,
+          const InternalKey& smallest, const InternalKey& largest, uint64_t estimate_lifetime) {
+      FileMetaData f;
+      f.number = file;
+      f.file_size = file_size;
+      f.smallest = smallest;
+      f.largest = largest;
+      f.est_lifetime = estimate_lifetime;
+      new_files_.push_back(std::make_pair(level, f));
+  }
 
+ /* void AddFile3(int level, uint64_t file, uint64_t file_size,
+                const InternalKey& smallest, const InternalKey& largest, uint64_t active_lifetime, uint64_t passive_lifetime){
+      FileMetaData f;
+      f.number = file;
+      f.file_size = file_size;
+      f.smallest = smallest;
+      f.largest = largest;
+      f.active_est_lifetime = active_lifetime;
+      f.passive_est_lifetime = passive_lifetime;
+      new_files_.push_back(std::make_pair(level, f));
+  }
+*/
   // Delete the specified "file" from the specified "level".
   void RemoveFile(int level, uint64_t file) {
     deleted_files_.insert(std::make_pair(level, file));
+  }
+
+  void RemoveFile2(int level, uint64_t file, bool is_sizecompaction, bool is_passive){
+      FileMetaData f;
+      //f.level = level;
+      f.number = file;
+      f.is_sizecompaction = is_sizecompaction;
+      f.is_passive = is_passive;
+      deleted_files_2.push_back(std::make_pair(level,f));
+  }
+
+  void RemoveFile3(int level, FileMetaData *f){
+      deleted_files_2.push_back(std::make_pair(level,*f));
   }
 
   void EncodeTo(std::string* dst) const;
@@ -120,6 +151,7 @@ class VersionEdit {
 
   std::vector<std::pair<int, InternalKey>> compact_pointers_;
   DeletedFileSet deleted_files_;
+  std::vector<std::pair<int, FileMetaData>> deleted_files_2;
   std::vector<std::pair<int, FileMetaData>> new_files_;
 };
 

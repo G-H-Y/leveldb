@@ -112,6 +112,15 @@ class Version {
       const InternalKey* end,    // nullptr means after all keys
       std::vector<FileMetaData*>* inputs);
 
+  void GetOverlappingInputs2(
+       int level,
+       const InternalKey* begin,  // nullptr means before all keys
+       const InternalKey* end,    // nullptr means after all keys
+       int which,
+       bool is_sizecompaction,
+       std::vector<FileMetaData*>* inputs
+       );
+
   // Returns true iff some file in the specified level overlaps
   // some part of [*smallest_user_key,*largest_user_key].
   // smallest_user_key==nullptr represents a key smaller than all the DB's keys.

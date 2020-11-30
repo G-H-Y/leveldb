@@ -538,6 +538,54 @@ void Version::GetOverlappingInputs(int level, const InternalKey* begin,
   }
 }
 
+void Version::GetOverlappingInputs2(int level, const InternalKey* begin,
+                                       const InternalKey* end, int which, bool is_sizecompaction,
+                                       std::vector<FileMetaData*>* inputs) {
+        assert(level >= 0);
+        assert(level < config::kNumLevels);
+        inputs->clear();
+        Slice user_begin, user_end;
+        if (begin != nullptr) {
+            user_begin = begin->user_key();
+        }
+        if (end != nullptr) {
+            user_end = end->user_key();
+        }
+        const Comparator* user_cmp = vset_->icmp_.user_comparator();
+        for (size_t i = 0; i < files_[level].size();) {
+            FileMetaData* f = files_[level][i++];
+            const Slice file_start = f->smallest.user_key();
+            const Slice file_limit = f->largest.user_key();
+            if (begin != nullptr && user_cmp->Compare(file_limit, user_begin) < 0) {
+                // "f" is completely before specified range; skip it
+            } else if (end != nullptr && user_cmp->Compare(file_start, user_end) > 0) {
+                // "f" is completely after specified range; skip it
+            } else {
+                if(which){
+                    f->is_passive = true;
+                }
+                if(is_sizecompaction){
+                    f->is_sizecompaction = true;
+                }
+                inputs->push_back(f);
+                if (level == 0) {
+                    // Level-0 files may overlap each other.  So check if the newly
+                    // added file has expanded the range.  If so, restart search.
+                    if (begin != nullptr && user_cmp->Compare(file_start, user_begin) < 0) {
+                        user_begin = file_start;
+                        inputs->clear();
+                        i = 0;
+                    } else if (end != nullptr &&
+                               user_cmp->Compare(file_limit, user_end) > 0) {
+                        user_end = file_limit;
+                        inputs->clear();
+                        i = 0;
+                    }
+                }
+            }
+        }
+    }
+
 std::string Version::DebugString() const {
   std::string r;
   for (int level = 0; level < config::kNumLevels; level++) {
@@ -629,6 +677,7 @@ class VersionSet::Builder {
   // Apply all of the edits in *edit to the current state.
   void Apply(VersionEdit* edit) {
     // Update compaction pointers
+    //printf("BEGIN APPLY\n");
     for (size_t i = 0; i < edit->compact_pointers_.size(); i++) {
       const int level = edit->compact_pointers_[i].first;
       vset_->compact_pointer_[level] =
@@ -636,9 +685,11 @@ class VersionSet::Builder {
     }
 
     // Delete files
-    for (const auto& deleted_file_set_kvp : edit->deleted_files_) {
+    for (const auto& deleted_file_set_kvp : edit->deleted_files_2) {
+        //printf("start for loop to log deleted files!\n");
       const int level = deleted_file_set_kvp.first;
-      const uint64_t number = deleted_file_set_kvp.second;
+      FileMetaData df = deleted_file_set_kvp.second;
+      const uint64_t number = df.number;
       levels_[level].deleted_files.insert(number);
 
       if (edit->IsTrivialMove()) {
@@ -666,18 +717,34 @@ class VersionSet::Builder {
       } else {
         if (vset_->all_file_stats_.find(level) != vset_->all_file_stats_.end()
           && vset_->all_file_stats_[level].find(number) != vset_->all_file_stats_[level].end()) {
+            //printf("start to log deleted files!\n");
             uint64_t delete_time = vset_->env_->NowMicros();
             vset_->all_file_stats_[level][number].delete_time = delete_time;
             uint64_t real_lifetime = vset_->all_file_stats_[level][number].delete_time - vset_->all_file_stats_[level][number].create_time;
             uint64_t estimate_lifetime = vset_->all_file_stats_[level][number].estimate_lifetime;
-            uint64_t err_rate;
+            double_t err_rate;
             if(real_lifetime > estimate_lifetime){
-                err_rate = real_lifetime - estimate_lifetime;
+                err_rate = (double_t)(real_lifetime - estimate_lifetime)/real_lifetime;
             }else{
-                err_rate = estimate_lifetime - real_lifetime;
+                err_rate = (double_t)(estimate_lifetime - real_lifetime)/real_lifetime;
             }
             std::string info = "level : " + NumberToString(level) + " number : " + NumberToString(number)
-                                + " est : " + NumberToString(estimate_lifetime) + " real : " + NumberToString(real_lifetime) + " err : " + NumberToString(err_rate) + "\n";
+                                + " est : " + NumberToString(estimate_lifetime) + " real : " + NumberToString(real_lifetime) + " err : " + std::to_string(err_rate);
+            if(df.is_sizecompaction){
+                info += " is_sizecompaction : 1 " ;
+            }else{
+                info += " is_sizecompaction : 0 " ;
+            }
+            if(df.is_passive){
+                info += " is_passive : 1 " ;
+            }else{
+                info += " is_passive : 0 " ;
+            }
+            if(df.is_deletedtag){
+                info += " is_deletedtag : 1 \n";
+            }else{
+                info += " is_deletedtag : 0 \n";
+            }
             vset_->est_log_->AppendLog(info);
             if(level < 3){
                 uint64_t avg = vset_->avetime_three_levels[level].first;
@@ -690,19 +757,22 @@ class VersionSet::Builder {
         }
       }
     }
-
+    //printf("end for loop!\n");
+    //printf("end for loop!\n");
     // Add new files
     for (size_t i = 0; i < edit->new_files_.size(); i++) {
+       // printf("apply: start to add new files! i = %lu \n ",i);
       const int level = edit->new_files_[i].first;
       FileMetaData* f = new FileMetaData(edit->new_files_[i].second);
 
       f->create_time = vset_->env_->NowMicros();
+     // printf("time is %llu\n",f->create_time);
       FileStat tmp_f;
       tmp_f.number = f->number;
       tmp_f.file_size = f->file_size;
       tmp_f.create_time = f->create_time;
       tmp_f.delete_time = f->create_time;
-      tmp_f.estimate_lifetime = f->estimate_lifetime;
+      tmp_f.estimate_lifetime = f->est_lifetime;
       tmp_f.created_level = level;
       auto found = vset_->all_file_stats_.find(level);
       if (found == vset_->all_file_stats_.end()) {
@@ -736,6 +806,7 @@ class VersionSet::Builder {
       levels_[level].deleted_files.erase(f->number);
       levels_[level].added_files->insert(f);
     }
+   // printf("done apply\n");
   }
 
   // Save the current state in *v.
@@ -1336,18 +1407,26 @@ Compaction* VersionSet::PickCompaction() {
       FileMetaData* f = current_->files_[level][i];
       if (compact_pointer_[level].empty() ||
           icmp_.Compare(f->largest.Encode(), compact_pointer_[level]) > 0) {
+        f->is_sizecompaction = true;
+        f->is_passive = false;
         c->inputs_[0].push_back(f);
         break;
       }
     }
     if (c->inputs_[0].empty()) {
       // Wrap-around to the beginning of the key space
-      c->inputs_[0].push_back(current_->files_[level][0]);
+      FileMetaData* f = current_->files_[level][0];
+      f->is_sizecompaction = true;
+      f->is_passive = false;
+      c->inputs_[0].push_back(f);
     }
   } else if (seek_compaction) {
     level = current_->file_to_compact_level_;
     c = new Compaction(options_, level);
-    c->inputs_[0].push_back(current_->file_to_compact_);
+    FileMetaData* f = current_->file_to_compact_;
+    f->is_sizecompaction = false;
+    f->is_passive = false;
+    c->inputs_[0].push_back(f);
   } else {
     return nullptr;
   }
@@ -1362,7 +1441,7 @@ Compaction* VersionSet::PickCompaction() {
     // Note that the next call will discard the file we placed in
     // c->inputs_[0] earlier and replace it with an overlapping set
     // which will include the picked file.
-    current_->GetOverlappingInputs(0, &smallest, &largest, &c->inputs_[0]);
+    current_->GetOverlappingInputs2(0, &smallest, &largest, 0, size_compaction, &c->inputs_[0]);
     assert(!c->inputs_[0].empty());
   }
 
@@ -1453,11 +1532,11 @@ void AddBoundaryInputs(const InternalKeyComparator& icmp,
 void VersionSet::SetupOtherInputs(Compaction* c) {
   const int level = c->level();
   InternalKey smallest, largest;
-
+  const bool size_compaction = (current_->compaction_score_ >= 1);
   AddBoundaryInputs(icmp_, current_->files_[level], &c->inputs_[0]);
   GetRange(c->inputs_[0], &smallest, &largest);
 
-  current_->GetOverlappingInputs(level + 1, &smallest, &largest,
+  current_->GetOverlappingInputs2(level + 1, &smallest, &largest,1,size_compaction,
                                  &c->inputs_[1]);
 
   // Get entire range covered by compaction
@@ -1468,7 +1547,7 @@ void VersionSet::SetupOtherInputs(Compaction* c) {
   // changing the number of "level+1" files we pick up.
   if (!c->inputs_[1].empty()) {
     std::vector<FileMetaData*> expanded0;
-    current_->GetOverlappingInputs(level, &all_start, &all_limit, &expanded0);
+    current_->GetOverlappingInputs2(level, &all_start, &all_limit, 0, size_compaction, &expanded0);
     AddBoundaryInputs(icmp_, current_->files_[level], &expanded0);
     const int64_t inputs0_size = TotalFileSize(c->inputs_[0]);
     const int64_t inputs1_size = TotalFileSize(c->inputs_[1]);
@@ -1479,7 +1558,7 @@ void VersionSet::SetupOtherInputs(Compaction* c) {
       InternalKey new_start, new_limit;
       GetRange(expanded0, &new_start, &new_limit);
       std::vector<FileMetaData*> expanded1;
-      current_->GetOverlappingInputs(level + 1, &new_start, &new_limit,
+      current_->GetOverlappingInputs2(level + 1, &new_start, &new_limit, 1, size_compaction,
                                      &expanded1);
       if (expanded1.size() == c->inputs_[1].size()) {
         Log(options_->info_log,
@@ -1626,7 +1705,9 @@ void Compaction::AddInputDeletions(VersionEdit* edit) {
   for (int which = 0; which < 2; which++) {
     for (size_t i = 0; i < inputs_[which].size(); i++) {
       edit->RemoveFile(level_ + which, inputs_[which][i]->number);
+      edit->RemoveFile3(level_+which,inputs_[which][i]);
     }
+
   }
 }
 
