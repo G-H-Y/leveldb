@@ -718,19 +718,25 @@ class VersionSet::Builder {
         if (vset_->all_file_stats_.find(level) != vset_->all_file_stats_.end()
           && vset_->all_file_stats_[level].find(number) != vset_->all_file_stats_[level].end()) {
             //printf("start to log deleted files!\n");
+            FileStat &fstat = vset_->all_file_stats_[level][number];
             uint64_t delete_time = vset_->env_->NowMicros();
-            vset_->all_file_stats_[level][number].delete_time = delete_time;
-            uint64_t real_lifetime = vset_->all_file_stats_[level][number].delete_time - vset_->all_file_stats_[level][number].create_time;
-            uint64_t estimate_lifetime = vset_->all_file_stats_[level][number].estimate_lifetime;
-            double_t err_rate;
-            if(real_lifetime > estimate_lifetime){
-                err_rate = (double_t)(real_lifetime - estimate_lifetime)/real_lifetime;
-            }else{
-                err_rate = (double_t)(estimate_lifetime - real_lifetime)/real_lifetime;
-            }
-            std::string info = "level : " + NumberToString(level) + " number : " + NumberToString(number)
-                                + " est : " + NumberToString(estimate_lifetime) + " real : " + NumberToString(real_lifetime) + " err : " + std::to_string(err_rate);
-            if(df.is_sizecompaction){
+            fstat.delete_time = delete_time;
+            df.delete_time = delete_time;
+            uint64_t real_lifetime = fstat.delete_time - fstat.create_time;
+            df.real_lifetime = real_lifetime;
+            uint64_t cal_est = fstat.cal_est;
+            uint64_t avg_est = fstat.avg_est;
+            uint64_t estimate_lifetime = fstat.estimate_lifetime;
+            double_t est_err_rate = Err_rate(estimate_lifetime,real_lifetime);
+            double_t cal_err_rate = Err_rate(cal_est, real_lifetime);
+            double_t avg_err_rate = Err_rate(avg_est, real_lifetime);
+            uint64_t del_cpt_id = df.del_cpt_id;
+            uint64_t crt_cpt_id = fstat.crt_cpt_id;
+            std::string info = "level : " + NumberToString(level) + " number : " + NumberToString(number) + " crt_cpt: " + NumberToString(crt_cpt_id) + " del_cpt: " + NumberToString(del_cpt_id)
+                    + " real : " + NumberToString(real_lifetime) + " cal_est: " + NumberToString(cal_est) + " avg_est: " + NumberToString(avg_est) + " est : " + NumberToString(estimate_lifetime)
+                    +  " cal_err: " + std::to_string(cal_err_rate) + " avg_err: "+ std::to_string(avg_err_rate) + " err : " + std::to_string(est_err_rate) +"\n";
+
+            /*  if(df.is_sizecompaction){
                 info += " is_sizecompaction : 1 " ;
             }else{
                 info += " is_sizecompaction : 0 " ;
@@ -744,18 +750,20 @@ class VersionSet::Builder {
                 info += " is_deletedtag : 1 \n";
             }else{
                 info += " is_deletedtag : 0 \n";
-            }
+            } */
             vset_->est_log_->AppendLog(info);
-            if(level < 3){
-                uint64_t avg = vset_->avetime_three_levels[level].first;
-                uint64_t sumsst = vset_->avetime_three_levels[level].second;
-                uint64_t sumtime = (avg * sumsst) + real_lifetime;
-                avg = sumtime / (sumsst+1);
-                vset_->avetime_three_levels[level].first = avg;
-                vset_->avetime_three_levels[level].second++;
-            }
+            // calculate average time
+            uint64_t avg = vset_->avetime_levels[level].first;
+            uint64_t sumsst = vset_->avetime_levels[level].second;
+            uint64_t sumtime = (avg * sumsst) + real_lifetime;
+            avg = sumtime / (sumsst+1);
+            vset_->avetime_levels[level].first = avg;
+            vset_->avetime_levels[level].second++;
         }
       }
+      FileMetaData* tf = new FileMetaData(df);
+      vset_->compaction_info[df.del_cpt_id].first.first = level;
+      vset_->compaction_info[df.del_cpt_id].first.second.push_back(tf);
     }
     //printf("end for loop!\n");
     //printf("end for loop!\n");
@@ -764,15 +772,20 @@ class VersionSet::Builder {
        // printf("apply: start to add new files! i = %lu \n ",i);
       const int level = edit->new_files_[i].first;
       FileMetaData* f = new FileMetaData(edit->new_files_[i].second);
-
       f->create_time = vset_->env_->NowMicros();
+      vset_->compaction_info[f->crt_cpt_id].second.first = level;
+      vset_->compaction_info[f->crt_cpt_id].second.second.push_back(f);
+
      // printf("time is %llu\n",f->create_time);
       FileStat tmp_f;
       tmp_f.number = f->number;
       tmp_f.file_size = f->file_size;
       tmp_f.create_time = f->create_time;
       tmp_f.delete_time = f->create_time;
-      tmp_f.estimate_lifetime = f->est_lifetime;
+      tmp_f.cal_est = f->cal_est;
+      tmp_f.avg_est = f->avg_est;
+      tmp_f.crt_cpt_id = f->crt_cpt_id;
+      tmp_f.estimate_lifetime = f->est_time;
       tmp_f.created_level = level;
       auto found = vset_->all_file_stats_.find(level);
       if (found == vset_->all_file_stats_.end()) {
@@ -1673,6 +1686,66 @@ void VersionSet::LogCurrentFilesStat(StatLog* log) {
   return;
 }
 
+
+void VersionSet::LogAllEstCompaction(StatLog* log){
+    if(log == nullptr){
+        return;
+    }
+    uint64_t level, number;
+    uint64_t del_cpt_id, crt_cpt_id;
+    uint64_t largest_key, smallest_key;
+    uint64_t cal_est, avg_est, est, realt;
+
+    for(uint64_t i = 1; i < compact_id ; i++){
+        std::cout << "compact id :" << compact_id << std::endl;
+        std::string str = "-------------------------Compaction " + NumberToString(i) + " --------------------------------- \n Parent SSTs: \n";
+        log->AppendLog(str);
+        for(const FileMetaData* f : compaction_info[i].first.second){
+            level = compaction_info[i].first.first;
+            number = f->number;
+            del_cpt_id = f->del_cpt_id;
+            crt_cpt_id = f->crt_cpt_id;
+            largest_key = std::atoi(f->largest.user_key().data());
+            smallest_key = std::atoi(f->smallest.user_key().data());
+            cal_est = f->cal_est;
+            avg_est = f->avg_est;
+            est = f->est_time;
+            realt = f->real_lifetime;
+            double_t est_err_rate = Err_rate(est,realt);
+            double_t cal_err_rate = Err_rate(cal_est, realt);
+            double_t avg_err_rate = Err_rate(avg_est, realt);
+            std::string info = "level : " + NumberToString(level) + " number : " + NumberToString(number) + " crt_cpt: " + NumberToString(crt_cpt_id) + " del_cpt: " + NumberToString(del_cpt_id)
+                               + " real : " + NumberToString(realt) + " cal_est: " + NumberToString(cal_est) + " avg_est: " + NumberToString(avg_est) + " est : " + NumberToString(est)
+                               +  " cal_err: " + std::to_string(cal_err_rate) + " avg_err: "+ std::to_string(avg_err_rate) + " err : " + std::to_string(est_err_rate)
+                               + " small: " + NumberToString(smallest_key) +" large: " + NumberToString(largest_key)
+                               + "\n";
+        }
+        str = "Created SSTs: \n";
+        log->AppendLog(str);
+        for(FileMetaData* f : compaction_info[i].second.second){
+            level = compaction_info[i].first.first;
+            number = f->number;
+            del_cpt_id = f->del_cpt_id;
+            crt_cpt_id = f->crt_cpt_id;
+            std::cout << "key: " << f->largest.getRep() << std::endl;
+            //largest_key = std::atoi(f->largest.Encode().data());
+            //smallest_key = std::atoi(f->smallest.user_key().data());
+            cal_est = f->cal_est;
+            avg_est = f->avg_est;
+            est = f->est_time;
+            realt = f->real_lifetime;
+            double_t est_err_rate = Err_rate(est,realt);
+            double_t cal_err_rate = Err_rate(cal_est, realt);
+            double_t avg_err_rate = Err_rate(avg_est, realt);
+            std::string info =   "level : " + NumberToString(level) + " number : " + NumberToString(number) + " crt_cpt: " + NumberToString(crt_cpt_id) + " del_cpt: " + NumberToString(del_cpt_id)
+                               + " real : " + NumberToString(realt) + " cal_est: " + NumberToString(cal_est) + " avg_est: " + NumberToString(avg_est) + " est : " + NumberToString(est)
+                               + " cal_err: " + std::to_string(cal_err_rate) + " avg_err: "+ std::to_string(avg_err_rate) + " err : " + std::to_string(est_err_rate)
+                               + " small: " + NumberToString(smallest_key) +" large: " + NumberToString(largest_key)
+                               + "\n";
+        }
+    }
+}
+
 Compaction::Compaction(const Options* options, int level)
     : level_(level),
       max_output_file_size_(MaxFileSizeForLevel(options, level)),
@@ -1701,10 +1774,11 @@ bool Compaction::IsTrivialMove() const {
               MaxGrandParentOverlapBytes(vset->options_));
 }
 
-void Compaction::AddInputDeletions(VersionEdit* edit) {
+void Compaction::AddInputDeletions(VersionEdit* edit, uint64_t compact_id) {
   for (int which = 0; which < 2; which++) {
     for (size_t i = 0; i < inputs_[which].size(); i++) {
       edit->RemoveFile(level_ + which, inputs_[which][i]->number);
+      inputs_[which][i]->del_cpt_id = compact_id;
       edit->RemoveFile3(level_+which,inputs_[which][i]);
     }
 

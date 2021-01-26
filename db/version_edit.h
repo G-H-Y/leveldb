@@ -18,7 +18,7 @@ namespace leveldb {
 class VersionSet;
 
 struct FileMetaData {
-  FileMetaData() : refs(0), allowed_seeks(1 << 30), file_size(0) {}
+  FileMetaData() : refs(0), allowed_seeks(1 << 30), file_size(0),crt_cpt_id(0),del_cpt_id(0) {}
 
   int refs;
   int allowed_seeks;  // Seeks allowed until compaction
@@ -30,7 +30,11 @@ struct FileMetaData {
   uint64_t create_time; //timestamp from 01-01-1970 (seconds)
   uint64_t delete_time;
   uint64_t real_lifetime;
-  uint64_t est_lifetime;
+  uint64_t avg_est;
+  uint64_t cal_est;
+  uint64_t est_time;
+  uint64_t crt_cpt_id;
+  uint64_t del_cpt_id;
   bool is_sizecompaction;
   bool is_passive;
   bool is_deletedtag;
@@ -82,14 +86,49 @@ class VersionEdit {
     new_files_.push_back(std::make_pair(level, f));
   }
 
+  // add files to level0
+    void AddFile0(int level, uint64_t file, uint64_t file_size,
+                  const InternalKey& smallest, const InternalKey& largest, uint64_t est_time) {
+        FileMetaData f;
+        f.number = file;
+        f.file_size = file_size;
+        f.smallest = smallest;
+        f.largest = largest;
+        f.cal_est = 0;
+        f.avg_est = est_time;
+        f.est_time = est_time;
+        f.crt_cpt_id = 0;
+        f.del_cpt_id = 0;
+        new_files_.push_back(std::make_pair(level, f));
+    }
+
   void AddFile2(int level, uint64_t file, uint64_t file_size,
-          const InternalKey& smallest, const InternalKey& largest, uint64_t estimate_lifetime) {
+          const InternalKey& smallest, const InternalKey& largest, uint64_t compact_id, uint64_t cal_est, uint64_t avg_est) {
       FileMetaData f;
       f.number = file;
       f.file_size = file_size;
       f.smallest = smallest;
       f.largest = largest;
-      f.est_lifetime = estimate_lifetime;
+      f.crt_cpt_id = compact_id;
+      f.del_cpt_id = 0;
+      //f.est_lifetime = estimate_lifetime;
+      f.cal_est = cal_est;
+      f.avg_est = avg_est;
+      //TODO() calculate the estimation lifetime based on cal_est & avg_est
+      // f.est_time =
+      if(cal_est == 0){
+          f.est_time = avg_est;
+      }else if(avg_est == 0){
+          f.est_time = cal_est;
+      }else{
+          if((cal_est > avg_est) && (cal_est-avg_est)/avg_est >= 1){
+              f.est_time = avg_est;
+          }else if((avg_est > cal_est) && (avg_est-cal_est)/cal_est >= 1){
+              f.est_time = cal_est;
+          }else{
+              f.est_time = (cal_est+avg_est)/2;
+          }
+      }
       new_files_.push_back(std::make_pair(level, f));
   }
 
@@ -110,12 +149,13 @@ class VersionEdit {
     deleted_files_.insert(std::make_pair(level, file));
   }
 
-  void RemoveFile2(int level, uint64_t file, bool is_sizecompaction, bool is_passive){
+  void RemoveFile2(int level, uint64_t file, bool is_sizecompaction, bool is_passive, uint64_t compact_id){
       FileMetaData f;
       //f.level = level;
       f.number = file;
       f.is_sizecompaction = is_sizecompaction;
       f.is_passive = is_passive;
+      f.del_cpt_id = compact_id;
       deleted_files_2.push_back(std::make_pair(level,f));
   }
 

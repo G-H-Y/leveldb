@@ -74,6 +74,10 @@ class DBImpl : public DB {
   // bytes.
   void RecordReadSample(Slice key);
 
+  void setGHYlog(StatLog* log){
+      ghy_log_ = log;
+  }
+
  private:
   friend class DB;
   struct CompactionState;
@@ -167,6 +171,7 @@ class DBImpl : public DB {
   const bool owns_cache_;
   const std::string dbname_;
   std::unique_ptr<StatLog> stat_log_;
+  StatLog* ghy_log_;
 
   // table_cache_ provides its own synchronization
   TableCache* const table_cache_;

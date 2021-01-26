@@ -141,6 +141,10 @@ class InternalKey {
     AppendInternalKey(&rep_, ParsedInternalKey(user_key, s, t));
   }
 
+  std::string getRep(){
+      return rep_;
+  }
+
   bool DecodeFrom(const Slice& s) {
     rep_.assign(s.data(), s.size());
     return !rep_.empty();

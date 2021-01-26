@@ -68,7 +68,11 @@ struct FileStat {
   //uint64_t delete_time;
   uint64_t create_time;
   uint64_t delete_time;
+  uint64_t avg_est;
+  uint64_t cal_est;
   uint64_t estimate_lifetime;
+  uint64_t crt_cpt_id;
+  uint64_t del_cpt_id;
   int created_level;
 };
 
@@ -203,11 +207,26 @@ class VersionSet {
   }
 
   uint64_t getAvgTime(int level){
-      uint64_t t = 0;
-      if(level < 3){
-          t = this->avetime_three_levels[level].first;
+      return this->avetime_levels[level].first;
+  }
+
+  void setCompactid(uint64_t id){
+      compact_id = id;
+  }
+
+  uint64_t getCompactid(){
+      return compact_id;
+  }
+
+//calculate err rate
+  static double_t Err_rate(uint64_t est, uint64_t realt){
+      double_t err_rate;
+      if(realt > est){
+          err_rate = (double_t)(realt - est)/realt;
+      }else{
+          err_rate = (double_t)(est - realt)/realt;
       }
-      return t;
+      return err_rate;
   }
 
   // Apply *edit to the current version to form a new descriptor that
@@ -306,6 +325,8 @@ class VersionSet {
   // the life_time is between log time and create time.
   void LogAllFilesStat(StatLog* log);
 
+  void LogAllEstCompaction(StatLog* log);
+
   // Return a human-readable short (single-line) summary of the number
   // of files per level.  Uses *scratch as backing store.
   struct LevelSummaryStorage {
@@ -348,8 +369,10 @@ class VersionSet {
   uint64_t log_number_;
   uint64_t prev_log_number_;  // 0 or backing store for memtable being compacted
   std::map<int, std::map<uint64_t, FileStat>> all_file_stats_;
-  std::map<uint64_t,std::pair<uint64_t ,uint64_t>> avetime_three_levels;
+  std::map<uint64_t, std::pair<std::pair<int, std::vector<FileMetaData* >> ,std::pair<int, std::vector<FileMetaData* >>>> compaction_info; // {compact_id, [(int,Parent ssts), (int,Created ssts)]}
+  std::map<uint64_t,std::pair<uint64_t ,uint64_t>> avetime_levels; //(sst_id, (avg_time, total_files))
   StatLog* est_log_;
+  uint64_t compact_id;
 
   // Opened lazily
   WritableFile* descriptor_file_;
@@ -389,7 +412,7 @@ class Compaction {
   bool IsTrivialMove() const;
 
   // Add all inputs to this compaction as delete operations to *edit.
-  void AddInputDeletions(VersionEdit* edit);
+  void AddInputDeletions(VersionEdit* edit, uint64_t compact_id);
 
   // Returns true if the information we have available guarantees that
   // the compaction is producing data in "level+1" for which no data exists

@@ -154,6 +154,7 @@ DBImpl::~DBImpl() {
   mutex_.Lock();
   versions_->LogAllFilesStat(stat_log_.get());
   versions_->LogCurrentFilesStat(stat_log_.get());
+  versions_->LogAllEstCompaction(ghy_log_);
 
   shutting_down_.store(true, std::memory_order_release);
   while (background_compaction_scheduled_) {
@@ -537,7 +538,7 @@ Status DBImpl::WriteLevel0Table(MemTable* mem, VersionEdit* edit,
       level = base->PickLevelForMemTableOutput(min_user_key, max_user_key);
     }
     uint64_t estimate_liftime = versions_->getAvgTime(level);
-    edit->AddFile2(level, meta.number, meta.file_size, meta.smallest,
+    edit->AddFile0(level, meta.number, meta.file_size, meta.smallest,
                   meta.largest, estimate_liftime);
   }
 
@@ -710,6 +711,7 @@ void DBImpl::BackgroundCompaction() {
   }
 
   Compaction* c;
+  uint64_t compact_id = versions_->getCompactid();
   bool is_manual = (manual_compaction_ != nullptr);
   InternalKey manual_end;
   if (is_manual) {
@@ -737,10 +739,13 @@ void DBImpl::BackgroundCompaction() {
     assert(c->num_input_files(0) == 1);
     FileMetaData* f = c->input(0, 0);
     c->edit()->RemoveFile(c->level(), f->number);
-    uint64_t est_lifetime = env_->NowMicros() - f->real_lifetime;
-    c->edit()->RemoveFile2(c->level(),f->number,f->is_sizecompaction,f->is_passive);
+    uint64_t cal_est = env_->NowMicros() - f->real_lifetime;
+    uint64_t avg_est = versions_->getAvgTime(c->level()+1);
+    f->del_cpt_id = compact_id;
+    c->edit()->RemoveFile3(c->level(),f);
+    //c->edit()->RemoveFile2(c->level(),f->number,f->is_sizecompaction,f->is_passive, compact_id);
     //c->edit()->AddFile(c->level() + 1, f->number, f->file_size, f->smallest, f->largest);
-    c->edit()->AddFile2(c->level() + 1, f->number, f->file_size, f->smallest, f->largest, est_lifetime);
+    c->edit()->AddFile2(c->level() + 1, f->number, f->file_size, f->smallest, f->largest, compact_id, cal_est, avg_est);
     c->edit()->SetTrivalMove();
     status = versions_->LogAndApply(c->edit(), &mutex_);
     //printf("done logandapply in trivialmove!!\n");
@@ -763,6 +768,7 @@ void DBImpl::BackgroundCompaction() {
     c->ReleaseInputs();
     RemoveObsoleteFiles();
   }
+  versions_->setCompactid(++compact_id);
   delete c;
 
   if (status.ok()) {
@@ -884,12 +890,13 @@ Status DBImpl::FinishCompactionOutputFile(CompactionState* compact,
 
 Status DBImpl::InstallCompactionResults(CompactionState* compact) {
   mutex_.AssertHeld();
+  const int compact_id = versions_->getCompactid();
   Log(options_.info_log, "Compacted %d@%d + %d@%d files => %lld bytes",
       compact->compaction->num_input_files(0), compact->compaction->level(),
       compact->compaction->num_input_files(1), compact->compaction->level() + 1,
       static_cast<long long>(compact->total_bytes));
 
-  std::string info = "--------------------Estimated Lifetime of Files at Level: " + NumberToString(compact->compaction->level()+1)+
+  std::string info = "Compact ID: "+ NumberToString(compact_id)+" --------------------Estimated Lifetime of Files at Level: " + NumberToString(compact->compaction->level()+1)+
                     " --------------------\n" + "+++++Real LifeTime of Predecessor SSTfiles++++++\n";
   stat_log_->AppendLog(info);
 
@@ -905,45 +912,38 @@ Status DBImpl::InstallCompactionResults(CompactionState* compact) {
   // Add compaction outputs
   std::string info2 = "+++++Estimated LifeTime of New Created SSTfiles++++++\n";
   stat_log_->AppendLog(info2);
-  std::vector<uint64_t> estimation;
-  compact->compaction->AddInputDeletions(compact->compaction->edit());
+  //std::vector<uint64_t> estimation;
+  compact->compaction->AddInputDeletions(compact->compaction->edit(),compact_id);
   const int level = compact->compaction->level();
   for (size_t i = 0; i < compact->outputs.size(); i++) {
     const CompactionState::Output& out = compact->outputs[i];
-    uint64_t estimate_lifetime = 0;
-    if(level >= 2){
-        for (int j = 0; j < compact->compaction->num_input_files(1); j++){
-            const FileMetaData& input_file = *compact->compaction->input(1, j);
-            Slice input_largest = input_file.largest.user_key();
-            Slice input_smallest = input_file.smallest.user_key();
-            Slice output_largest = out.largest.user_key();
-            Slice output_smallest = out.smallest.user_key();
-            Slice overlap_end = input_largest.compare(output_largest) < 0 ? input_largest : output_largest;
-            Slice overlap_begin = input_smallest.compare(output_smallest) < 0 ? output_smallest : input_smallest;
-            double ol = std::atof(output_largest.data());
-            double os = std::atof(output_smallest.data());
-            double ob = std::atof(overlap_begin.data());
-            double oe = std::atof(overlap_end.data());
-            double overlap_ratio = (double)(oe-ob)/(ol-os);
-            if(overlap_ratio > 0 && overlap_ratio <= 1){
-                estimate_lifetime += overlap_ratio * input_file.real_lifetime;
-            }
+    uint64_t cal_est = 0;
+    uint64_t avg_est = 0;
+    //cal_time: estimation lifetime calculated by the currently compacted files
+    for (int j = 0; j < compact->compaction->num_input_files(1); j++){
+        const FileMetaData& input_file = *compact->compaction->input(1, j);
+        Slice input_largest = input_file.largest.user_key();
+        Slice input_smallest = input_file.smallest.user_key();
+        Slice output_largest = out.largest.user_key();
+        Slice output_smallest = out.smallest.user_key();
+        Slice overlap_end = input_largest.compare(output_largest) < 0 ? input_largest : output_largest;
+        Slice overlap_begin = input_smallest.compare(output_smallest) < 0 ? output_smallest : input_smallest;
+        double ol = std::atof(output_largest.data());
+        double os = std::atof(output_smallest.data());
+        double ob = std::atof(overlap_begin.data());
+        double oe = std::atof(overlap_end.data());
+        double overlap_ratio = (double)(oe-ob)/(ol-os);
+        if(overlap_ratio > 0 && overlap_ratio <= 1){
+            cal_est += overlap_ratio * input_file.real_lifetime;
         }
-        estimation.push_back(estimate_lifetime);
-        /*compact->compaction->edit()->AddFile(level + 1, out.number, out.file_size,
-                                              out.smallest, out.largest);
-              */
-        compact->compaction->edit()->AddFile2(level + 1, out.number, out.file_size,
-                                              out.smallest, out.largest,estimate_lifetime);
-        std::string csst = NumberToString(out.number) + " " + NumberToString(estimate_lifetime) + "\n";
-        stat_log_->AppendLog(csst);
-    }else{
-        estimate_lifetime = versions_->getAvgTime(level+1);
-        compact->compaction->edit()->AddFile2(level + 1, out.number, out.file_size,
-                                              out.smallest, out.largest,estimate_lifetime);
-        std::string csst = NumberToString(out.number) + " " + NumberToString(estimate_lifetime) + "\n";
-        stat_log_->AppendLog(csst);
     }
+    // avg_est: average lifetime of the whole level
+    avg_est = versions_->getAvgTime(level+1);
+
+    compact->compaction->edit()->AddFile2(level + 1, out.number, out.file_size,
+                                              out.smallest, out.largest, compact_id, cal_est, avg_est);
+    std::string csst = NumberToString(out.number) + " " +"cal_est: "+ NumberToString(cal_est) +" "+"avg_est: "+NumberToString(avg_est) + "\n";
+    stat_log_->AppendLog(csst);
   }
 
   return versions_->LogAndApply(compact->compaction->edit(), &mutex_);
@@ -1553,6 +1553,7 @@ Status DB::Open(const Options& options, const std::string& dbname, DB** dbptr) {
   bool save_manifest = false;
   Status s = impl->Recover(&edit, &save_manifest);
   if (s.ok() && impl->mem_ == nullptr) {
+    impl->versions_->setCompactid(1);
     // Create new log and a corresponding memtable.
     uint64_t new_log_number = impl->versions_->NewFileNumber();
     WritableFile* lfile;
@@ -1594,6 +1595,16 @@ Status DB::Open(const Options& options, const std::string& dbname, DB** dbptr) {
           StatLog* new_log = new StatLog(log_f);
           impl->versions_->setEstLog(new_log);
       }
+  }
+  if(s.ok()){
+    uint64_t now_time = impl->env_->NowMicros();
+    WritableFile* log_f;
+    std::string f_name = dbname + "/GHYLog_" + NumberToString(now_time);
+    s = options.env->NewWritableFile(f_name, &log_f);
+    if(s.ok()){
+        StatLog* new_log = new StatLog(log_f);
+        impl->setGHYlog(new_log);
+    }
   }
   if (s.ok() && save_manifest) {
     edit.SetPrevLogNumber(0);  // No older logs needed after recovery.
