@@ -218,6 +218,15 @@ class VersionSet {
       return compact_id;
   }
 
+  void setInputCpatInfo(uint64_t cpt_id, int level, FileMetaData f){
+      FileMetaData* tf = new FileMetaData(f);
+      compaction_input_ssts[cpt_id].push_back(std::make_pair(level,tf));
+  }
+  void setOutputCpatInfo(uint64_t cpt_id, int level, FileMetaData f){
+      FileMetaData* tf = new FileMetaData(f);
+      compaction_output_ssts[cpt_id].push_back(std::make_pair(level,tf));
+  }
+
 //calculate err rate
   static double_t Err_rate(uint64_t est, uint64_t realt){
       double_t err_rate;
@@ -369,7 +378,9 @@ class VersionSet {
   uint64_t log_number_;
   uint64_t prev_log_number_;  // 0 or backing store for memtable being compacted
   std::map<int, std::map<uint64_t, FileStat>> all_file_stats_;
-  std::map<uint64_t, std::pair<std::pair<int, std::vector<FileMetaData* >> ,std::pair<int, std::vector<FileMetaData* >>>> compaction_info; // {compact_id, [(int,Parent ssts), (int,Created ssts)]}
+  //std::map<uint64_t, std::pair<std::pair<int, std::vector<FileMetaData* >> ,std::pair<int, std::vector<FileMetaData* >>>> compaction_info; // {compact_id, [(int,Parent ssts), (int,Created ssts)]}
+  std::map<uint64_t, std::vector<std::pair<int, FileMetaData*>>> compaction_input_ssts; //(compaction_id, (level, sstid))
+  std::map<uint64_t, std::vector<std::pair<int, FileMetaData*>>> compaction_output_ssts; //(compaction_id, (level, sstid))
   std::map<uint64_t,std::pair<uint64_t ,uint64_t>> avetime_levels; //(sst_id, (avg_time, total_files))
   StatLog* est_log_;
   uint64_t compact_id;

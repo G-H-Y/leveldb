@@ -890,6 +890,7 @@ Status DBImpl::FinishCompactionOutputFile(CompactionState* compact,
 
 Status DBImpl::InstallCompactionResults(CompactionState* compact) {
   mutex_.AssertHeld();
+
   const int compact_id = versions_->getCompactid();
   Log(options_.info_log, "Compacted %d@%d + %d@%d files => %lld bytes",
       compact->compaction->num_input_files(0), compact->compaction->level(),
@@ -900,13 +901,22 @@ Status DBImpl::InstallCompactionResults(CompactionState* compact) {
                     " --------------------\n" + "+++++Real LifeTime of Predecessor SSTfiles++++++\n";
   stat_log_->AppendLog(info);
 
-  //calculate delete_time/real_lifetime
+  //calculate delete_time/
+  for (int i = 0; i < compact->compaction->num_input_files(0); i++){
+      FileMetaData& f = *compact->compaction->input(0, i);
+      f.delete_time = env_->NowMicros();
+      f.real_lifetime = f.delete_time - f.create_time;
+      std::string psst = NumberToString(compact->compaction->level()) + " " + NumberToString(f.number) + " " + NumberToString(f.real_lifetime) + "\n";
+      stat_log_->AppendLog(psst);
+      versions_->setInputCpatInfo(compact_id,compact->compaction->level(),f);
+  }
   for (int i = 0; i < compact->compaction->num_input_files(1); i++){
       FileMetaData& f = *compact->compaction->input(1, i);
       f.delete_time = env_->NowMicros();
       f.real_lifetime = f.delete_time - f.create_time;
-      std::string psst = NumberToString(f.number) + " " + NumberToString(f.real_lifetime) + "\n";
+      std::string psst = NumberToString(compact->compaction->level()+1) + " " + NumberToString(f.number) + " " + NumberToString(f.real_lifetime) + "\n";
       stat_log_->AppendLog(psst);
+      versions_->setInputCpatInfo(compact_id,compact->compaction->level()+1,f);
   }
 
   // Add compaction outputs
@@ -939,11 +949,14 @@ Status DBImpl::InstallCompactionResults(CompactionState* compact) {
     }
     // avg_est: average lifetime of the whole level
     avg_est = versions_->getAvgTime(level+1);
-
-    compact->compaction->edit()->AddFile2(level + 1, out.number, out.file_size,
-                                              out.smallest, out.largest, compact_id, cal_est, avg_est);
-    std::string csst = NumberToString(out.number) + " " +"cal_est: "+ NumberToString(cal_est) +" "+"avg_est: "+NumberToString(avg_est) + "\n";
+    FileMetaData* pf;
+    compact->compaction->edit()->AddFile3(level + 1, out.number, out.file_size,
+                                              out.smallest, out.largest, compact_id, cal_est, avg_est, &pf);
+    std::string csst = NumberToString(out.number) + " " +"cal_est: "+ NumberToString(cal_est) +" "+"avg_est: "+NumberToString(avg_est)
+                        + " small_key: " + NumberToString(std::atoi(out.smallest.user_key().data())) + " largest_key: " + NumberToString(atoi(out.largest.user_key().data()))
+                        + "\n";
     stat_log_->AppendLog(csst);
+    versions_->setOutputCpatInfo(compact_id,level+1, *pf);
   }
 
   return versions_->LogAndApply(compact->compaction->edit(), &mutex_);

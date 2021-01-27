@@ -762,19 +762,29 @@ class VersionSet::Builder {
         }
       }
       FileMetaData* tf = new FileMetaData(df);
-      vset_->compaction_info[df.del_cpt_id].first.first = level;
-      vset_->compaction_info[df.del_cpt_id].first.second.push_back(tf);
+      for(auto& e : vset_->compaction_input_ssts[df.del_cpt_id]){
+          if(tf->number == e.second->number){
+              e.second = tf;
+          }
+      }
     }
     //printf("end for loop!\n");
     //printf("end for loop!\n");
     // Add new files
+    //std::cout << "--------create ssts: " <<  "--------- \n";
+    //uint64_t cptid;
     for (size_t i = 0; i < edit->new_files_.size(); i++) {
        // printf("apply: start to add new files! i = %lu \n ",i);
       const int level = edit->new_files_[i].first;
       FileMetaData* f = new FileMetaData(edit->new_files_[i].second);
       f->create_time = vset_->env_->NowMicros();
-      vset_->compaction_info[f->crt_cpt_id].second.first = level;
-      vset_->compaction_info[f->crt_cpt_id].second.second.push_back(f);
+     // cptid = f->crt_cpt_id;
+     /* for(auto& e : vset_->compaction_output_ssts[cptid]){
+          if(f->number == e.second->number){
+              e.second = f;
+          }
+      }*/
+     // std::cout << f->number << std::endl;
 
      // printf("time is %llu\n",f->create_time);
       FileStat tmp_f;
@@ -819,6 +829,10 @@ class VersionSet::Builder {
       levels_[level].deleted_files.erase(f->number);
       levels_[level].added_files->insert(f);
     }
+   // std::cout << "--------compact info: " <<  "--------- \n";
+   /* for(FileMetaData* f : vset_->compaction_info[cptid].second.second){
+        std::cout << f->number << std::endl;
+    }*/
    // printf("done apply\n");
   }
 
@@ -1697,11 +1711,12 @@ void VersionSet::LogAllEstCompaction(StatLog* log){
     uint64_t cal_est, avg_est, est, realt;
 
     for(uint64_t i = 1; i < compact_id ; i++){
-        std::cout << "compact id :" << compact_id << std::endl;
+        //std::cout << "compact id :" << compact_id << std::endl;
         std::string str = "-------------------------Compaction " + NumberToString(i) + " --------------------------------- \n Parent SSTs: \n";
         log->AppendLog(str);
-        for(const FileMetaData* f : compaction_info[i].first.second){
-            level = compaction_info[i].first.first;
+        for(auto& e : compaction_input_ssts[i]){
+            level = e.first;
+            FileMetaData* f = e.second;
             number = f->number;
             del_cpt_id = f->del_cpt_id;
             crt_cpt_id = f->crt_cpt_id;
@@ -1719,17 +1734,18 @@ void VersionSet::LogAllEstCompaction(StatLog* log){
                                +  " cal_err: " + std::to_string(cal_err_rate) + " avg_err: "+ std::to_string(avg_err_rate) + " err : " + std::to_string(est_err_rate)
                                + " small: " + NumberToString(smallest_key) +" large: " + NumberToString(largest_key)
                                + "\n";
+            log->AppendLog(info);
         }
-        str = "Created SSTs: \n";
-        log->AppendLog(str);
-        for(FileMetaData* f : compaction_info[i].second.second){
-            level = compaction_info[i].first.first;
+        std::string str1 = "Created SSTs: \n";
+        log->AppendLog(str1);
+        for(auto& e : compaction_output_ssts[i]){
+            level = e.first;
+            FileMetaData* f = e.second;
             number = f->number;
             del_cpt_id = f->del_cpt_id;
             crt_cpt_id = f->crt_cpt_id;
-            std::cout << "key: " << f->largest.getRep() << std::endl;
-            //largest_key = std::atoi(f->largest.Encode().data());
-            //smallest_key = std::atoi(f->smallest.user_key().data());
+            largest_key = std::atoi(f->largest.user_key().data());
+            smallest_key = std::atoi(f->smallest.user_key().data());
             cal_est = f->cal_est;
             avg_est = f->avg_est;
             est = f->est_time;
@@ -1742,8 +1758,10 @@ void VersionSet::LogAllEstCompaction(StatLog* log){
                                + " cal_err: " + std::to_string(cal_err_rate) + " avg_err: "+ std::to_string(avg_err_rate) + " err : " + std::to_string(est_err_rate)
                                + " small: " + NumberToString(smallest_key) +" large: " + NumberToString(largest_key)
                                + "\n";
+            log->AppendLog(info);
         }
     }
+    return;
 }
 
 Compaction::Compaction(const Options* options, int level)

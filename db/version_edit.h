@@ -132,6 +132,37 @@ class VersionEdit {
       new_files_.push_back(std::make_pair(level, f));
   }
 
+    void AddFile3(int level, uint64_t file, uint64_t file_size,
+                  const InternalKey& smallest, const InternalKey& largest, uint64_t compact_id, uint64_t cal_est, uint64_t avg_est, FileMetaData** pf) {
+        FileMetaData f;
+        f.number = file;
+        f.file_size = file_size;
+        f.smallest = smallest;
+        f.largest = largest;
+        f.crt_cpt_id = compact_id;
+        f.del_cpt_id = 0;
+        //f.est_lifetime = estimate_lifetime;
+        f.cal_est = cal_est;
+        f.avg_est = avg_est;
+        //TODO() calculate the estimation lifetime based on cal_est & avg_est
+        // f.est_time =
+        if(cal_est == 0){
+            f.est_time = avg_est;
+        }else if(avg_est == 0){
+            f.est_time = cal_est;
+        }else{
+            if((cal_est > avg_est) && (cal_est-avg_est)/avg_est >= 1){
+                f.est_time = avg_est;
+            }else if((avg_est > cal_est) && (avg_est-cal_est)/cal_est >= 1){
+                f.est_time = cal_est;
+            }else{
+                f.est_time = (cal_est+avg_est)/2;
+            }
+        }
+        new_files_.push_back(std::make_pair(level, f));
+        *pf = new FileMetaData(f);
+    }
+
  /* void AddFile3(int level, uint64_t file, uint64_t file_size,
                 const InternalKey& smallest, const InternalKey& largest, uint64_t active_lifetime, uint64_t passive_lifetime){
       FileMetaData f;
