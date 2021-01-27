@@ -767,6 +767,13 @@ class VersionSet::Builder {
               e.second = tf;
           }
       }
+      for(auto& e : vset_->compaction_output_ssts){
+          for(auto& s : e.second){
+              if(s.second->number == df.number){
+                  s.second->del_cpt_id = df.del_cpt_id;
+              }
+          }
+      }
     }
     //printf("end for loop!\n");
     //printf("end for loop!\n");
